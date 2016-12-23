@@ -85,10 +85,10 @@ char *shmem_read(const char *name)
     if (shmem_exists(name))
     {        
         mutex_lock();
-        
+
         int fd = shm_open(get_name(name), flags, mode);
         fstat(fd, &buffer);
-        ret = (char *)malloc(buffer.st_size);
+        
         ret = mmap(NULL, buffer.st_size, PROT_READ, MAP_SHARED, fd, 0);
 
         mutex_release();
