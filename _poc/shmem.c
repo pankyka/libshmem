@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdbool.h>
 #include <strings.h>
 #include <errno.h>
@@ -29,14 +30,14 @@ struct shmem_result
     int fd;
 };
 
-shmem_result shmem_open(char *name)
+shmem_result shmem_open(const char *name)
 {
     struct shmem_result result;
-    result.id = name;
+    result.id = (char *)name;
 
     mutex_lock();
 
-    result.fd = shm_open(strjoin("/", name), flags, mode);
+    result.fd = shm_open(get_name(name), flags, mode);
 
     mutex_release();
 
@@ -48,69 +49,60 @@ shmem_result shmem_open(char *name)
     else
     {
         result.state = ERROR;
-        switch (errno)
-        {
-        case EACCES:
-            printf("Permission Exception.\n");
-            break;
-        case EEXIST:
-            printf("Shared memory object specified by name already exists.\n");
-            break;
-        case EINVAL:
-            printf("Invalid shared memory name passed.\n");
-            break;
-        case EMFILE:
-            printf("The process already has the maximum number of files open.\n");
-            break;
-        case ENAMETOOLONG:
-            printf("The length of name exceeds PATH_MAX.\n");
-            break;
-        case ENFILE:
-            printf("The limit on the total number of files open on the system has been reached.\n");
-            break;
-        default:
-            printf("Invalid exception occurred in shared memory creation.\n");
-            break;
-        }
+        //perror(errno);
     }
 
     return result;
 }
 
-shmem_result shmem_close(char *name)
+shmem_result shmem_close(const char *name)
 {
     struct shmem_result result;
 
     mutex_lock();
 
-    result.fd = shm_unlink(strjoin("/", name));
+    result.fd = shm_unlink(get_name(name));
 
     mutex_release();
 
-    result.id = name;
+    result.id = (char *)name;
     result.state = CLOSED;
 
     return result;
 }
 
-bool shmem_exists(char *name)
+bool shmem_exists(const char *name)
 {
-    int fd = shm_open(strjoin("/", name), O_EXCL);
+    int fd = shm_open(get_name(name), O_EXCL, 0);
 
     return fd > -1;
 }
-/*
-char *shmem_read(char *name)
+
+char *shmem_read(const char *name)
 {
-    char *ret[0];
+    char *ret;
+    struct stat buffer;
     if (shmem_exists(name))
-    {
+    {        
+        mutex_lock();
+        
+        int fd = shm_open(get_name(name), flags, mode);
+        fstat(fd, &buffer);
+        ret = (char *)malloc(buffer.st_size);
+        ret = mmap(NULL, buffer.st_size, PROT_READ, MAP_SHARED, fd, 0);
+
+        mutex_release();
+
+        if (ret == MAP_FAILED)
+        {
+            printf("Map failed. \n");            
+        }
     }
 
     return ret;
 }
-*/
-bool shmem_write(char *name, char *data)
+
+bool shmem_write(const char *name, const char *data)
 {
     bool succeeded = false;
     if (shmem_exists(name))
@@ -120,28 +112,28 @@ bool shmem_write(char *name, char *data)
         int data_size = strlen(data);
         struct stat buffer;
 
-        int fd = shm_open(strjoin("/", name), flags, mode);
+        int fd = shm_open(get_name(name), flags, mode);
         fstat(fd, &buffer);
+        ftruncate(fd, data_size + buffer.st_size);   
 
-        printf("data size: %d \n", data_size);
-        printf("shm size: %lld \n", buffer.st_size);
-        
+        data_size += buffer.st_size;
+
         void *ptr = mmap(NULL, data_size, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
 
         if (ptr == MAP_FAILED)
         {
-            printf("Map failed. \n");
+            printf("Map failed. \n");            
         }
 
         close(fd);
 
-        memcpy(ptr, data, data_size);
+        memcpy(ptr, strcat(ptr, data), data_size);
 
         write(STDOUT_FILENO, ptr, data_size);       
 
         fstat(fd, &buffer);
         printf("\n");
-        printf("shm size: %lld \n", buffer.st_size);
+        printf("shm size: %llu \n", (unsigned long long)buffer.st_size);
         printf("-------------------\n");
 
         mutex_release();
@@ -161,7 +153,12 @@ void mutex_release()
     pthread_mutex_unlock(&mutex);
 }
 
-char *strjoin(char *strA, char *strB)
+char *get_name(const char *name) 
+{
+    return strjoin("/", name);
+}
+
+char *strjoin(const char *strA, const char *strB)
 {
     size_t lenA = strlen(strA);
     size_t lenB = strlen(strB);
@@ -185,13 +182,19 @@ int main(void)
 
     printf("exists: %d \n", is_exists);
 
-    shmem_write(result.id, "Hello World!");
+    shmem_write(result.id, "Hello");
 
-    shmem_write(result.id, "Hello World!");
+    shmem_write(result.id, "Hello");
+
+    shmem_write(result.id, "Hello");
+
+    char *ret = shmem_read(named);
+
+    write(STDOUT_FILENO, ret, strlen(ret));       
 
     struct shmem_result res = shmem_close(result.id);
 
-    printf("id: %s, fd: %d, state: %d \n", res.id, res.fd, res.state);
+    printf("\nid: %s, fd: %d, state: %d \n", res.id, res.fd, res.state);
 
     exit(0);
 }
